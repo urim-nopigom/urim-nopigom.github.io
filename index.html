@@ -55,9 +55,10 @@
     let picture=null;
     if (typeof post.image === 'string' && post.image.trim()) {
       try {
-        const imgUrl=new URL(post.image);
-        const imageHosts=['blogfiles.pstatic.net','postfiles.pstatic.net','mblogthumb-phinf.pstatic.net','phinf.pstatic.net','ssl.pstatic.net'];
-        if(imgUrl.protocol==='https:' && imageHosts.includes(imgUrl.hostname)) {
+        const imgUrl=new URL(post.image, window.location.href);
+        const allowedNaver=(imgUrl.hostname.endsWith('.pstatic.net') || imgUrl.hostname==='blogfiles.naver.net');
+        const allowedLocal=(imgUrl.origin===window.location.origin && /^\/images\/blog-[0-9]+\.(jpg|png|webp)$/.test(imgUrl.pathname));
+        if(imgUrl.protocol==='https:' && (allowedNaver || allowedLocal)) {
           picture=document.createElement('img');
           picture.src=imgUrl.href;
           picture.alt=post.title+' 대표 사진';
