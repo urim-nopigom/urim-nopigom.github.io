@@ -1,97 +1,141 @@
 #!/usr/bin/env python3
-"""Read public Naver RSS, save titles/links/dates for the static homepage."""
-import json
+"""Publish Naver RSS posts and their available thumbnail photos."""
 import html
+from html.parser import HTMLParser
+import json
+from pathlib import Path
 import re
-import pathlib
-import urllib.request
 import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import timezone
 from email.utils import parsedate_to_datetime
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-RSS_URL = 'https://rss.blog.naver.com/urim_cozy_study.xml'
+ROOT = Path(__file__).resolve().parents[1]
+RSS = 'https://rss.blog.naver.com/urim_cozy_study.xml'
 DEST = ROOT / 'posts.json'
+IMAGE_DIR = ROOT / 'images'
 
 
-def valid_url(value):
-    parsed = urllib.parse.urlparse(value or '')
-    return parsed.scheme == 'https' and (parsed.hostname or '').lower() in ('blog.naver.com', 'm.blog.naver.com')
+def request(url, referer=None):
+    headers = {'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile Safari/604.1'}
+    if referer:
+        headers['Referer'] = referer
+    return urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=15)
 
 
-# Only accept image URLs from known Naver image hosts.
-IMAGE_HOSTS = {
-    'blogfiles.pstatic.net',
-    'postfiles.pstatic.net',
-    'mblogthumb-phinf.pstatic.net',
-    'phinf.pstatic.net',
-    'ssl.pstatic.net',
-}
-
-
-def valid_image_url(value):
+def valid_image(url):
     try:
-        url = urllib.parse.urlparse(html.unescape(value or '').strip())
-        return url.scheme == 'https' and (url.hostname or '').lower() in IMAGE_HOSTS
+        p = urllib.parse.urlsplit(html.unescape(url or ''))
+        h = (p.hostname or '').lower()
+        return p.scheme == 'https' and (h.endswith('.pstatic.net') or h == 'blogfiles.naver.net')
     except ValueError:
         return False
 
 
-def find_image(item):
-    # RSS feeds may include the thumbnail in different optional fields.
-    thumbnails = []
+class Images(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.meta = []
+        self.img = []
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == 'meta' and (a.get('property') or a.get('name') or '').lower() in ('og:image','twitter:image'):
+            self.meta.append(a.get('content') or '')
+        if tag == 'img':
+            self.img.extend([a.get(k, '') for k in ('data-lazy-src','data-src','src')])
+
+
+def post_details(url):
+    p = urllib.parse.urlsplit(url)
+    qs = urllib.parse.parse_qs(p.query)
+    number = (qs.get('logNo') or [''])[0]
+    blog_id = (qs.get('blogId') or ['urim_cozy_study'])[0]
+    if not number:
+        m = re.search(r'/([0-9]{7,})/?$', p.path)
+        if m:
+            number = m.group(1)
+    if not number.isdigit() or blog_id != 'urim_cozy_study':
+        return '', ''
+    return f'https://m.blog.naver.com/urim_cozy_study/{number}', number
+
+
+def candidates(item, post_url):
+    found = []
     for node in item.iter():
-        tag = node.tag.rsplit('}', 1)[-1].lower()
-        if tag in ('thumbnail', 'content', 'image', 'enclosure'):
-            thumbnails.extend((node.attrib.get('url', ''), node.text or ''))
-    descriptions = [
-        item.findtext('description') or '',
-        item.findtext('{http://purl.org/rss/1.0/modules/content/}encoded') or '',
-    ]
-    for description in descriptions:
-        decoded = html.unescape(description)
-        # Prefer actual image elements over arbitrary URLs in post text.
-        for match in re.finditer(r'<img\b[^>]*>', decoded, re.IGNORECASE):
-            tag = match.group(0)
-            for key in ('data-lazy-src', 'data-src', 'src'):
-                attribute = re.search(r'\b' + key + r'\s*=\s*[\"\']([^\"\']+)[\"\']', tag, re.IGNORECASE)
-                if attribute:
-                    thumbnails.append(attribute.group(1))
-    for candidate in thumbnails:
-        candidate = html.unescape(candidate.strip())
-        if valid_image_url(candidate):
-            return candidate
-    return ''
+        name = node.tag.rsplit('}',1)[-1].lower()
+        if name in ('thumbnail','image','enclosure','content'):
+            found.extend([node.attrib.get('url',''), node.text or ''])
+    for field in ('description', '{http://purl.org/rss/1.0/modules/content/}encoded'):
+        parser = Images()
+        parser.feed(html.unescape(item.findtext(field) or ''))
+        found.extend(parser.meta + parser.img)
+    if not any(valid_image(x) for x in found) and post_url:
+        try:
+            with request(post_url) as resp:
+                source = resp.read(2_000_000).decode('utf-8', 'replace')
+            parser = Images()
+            parser.feed(source)
+            found.extend(parser.meta + parser.img)
+        except Exception as exc:
+            print('Post page image lookup failed:', type(exc).__name__)
+    return [html.unescape(x).strip() for x in found if valid_image(x)]
+
+
+def save_image(urls, number, referer):
+    if not number:
+        return ''
+    for url in urls[:6]:
+        try:
+            with request(url, referer) as resp:
+                typ = resp.headers.get_content_type().lower()
+                ext = {'image/jpeg':'jpg','image/png':'png','image/webp':'webp'}.get(typ)
+                if not ext:
+                    continue
+                data = resp.read(3_000_001)
+                if not data or len(data) > 3_000_000:
+                    continue
+            IMAGE_DIR.mkdir(exist_ok=True)
+            name = f'blog-{number}.{ext}'
+            dest = IMAGE_DIR / name
+            if not dest.exists() or dest.read_bytes() != data:
+                dest.write_bytes(data)
+            return 'images/' + name
+        except Exception as exc:
+            print('Image download failed:', type(exc).__name__)
+    return urls[0] if urls else ''
 
 
 def main():
-    request = urllib.request.Request(RSS_URL, headers={'User-Agent': 'Mozilla/5.0 (compatible; NopigomRSS/1.0)', 'Accept': 'application/rss+xml, application/xml, text/xml'})
-    with urllib.request.urlopen(request, timeout=25) as response:
-        document = response.read(3_000_000)
-    root = ET.fromstring(document)
+    with request(RSS) as resp:
+        root = ET.fromstring(resp.read(3_000_000))
     posts = []
     for item in root.findall('./channel/item'):
         title = (item.findtext('title') or '').strip()
         link = (item.findtext('link') or '').strip()
-        if not title or not valid_url(link):
+        u = urllib.parse.urlsplit(link)
+        if not title or u.scheme != 'https' or u.hostname not in ('blog.naver.com','m.blog.naver.com'):
             continue
-        date = ''
-        pub = (item.findtext('pubDate') or '').strip()
-        if pub:
-            try:
-                date = parsedate_to_datetime(pub).astimezone(timezone.utc).date().isoformat()
-            except (TypeError, ValueError, OverflowError):
-                pass
-        posts.append({'title': title[:160], 'url': link, 'date': date, 'image': find_image(item)})
+        day = ''
+        try:
+            parsed = parsedate_to_datetime((item.findtext('pubDate') or '').strip())
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            day = parsed.astimezone(timezone.utc).date().isoformat()
+        except (ValueError,TypeError,OverflowError):
+            pass
+        post_url, number = post_details(link)
+        choices = candidates(item, post_url)
+        image = save_image(choices, number, post_url or link) if choices else ''
+        posts.append({'title':title[:160],'url':link,'date':day,'image':image})
+        print('Photo found:', bool(image), 'for', title[:40])
         if len(posts) >= 6:
             break
     if not posts:
-        raise RuntimeError('RSS returned no public posts; existing posts.json left unchanged')
-    result = {'posts': posts}
-    output = json.dumps(result, ensure_ascii=False, indent=2) + '\n'
-    DEST.write_text(output, encoding='utf-8')
-    print(f'Updated {len(posts)} posts')
+        raise RuntimeError('No RSS posts found; existing file not overwritten')
+    DEST.write_text(json.dumps({'posts':posts},ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+    print('Updated',len(posts),'posts')
 
 if __name__ == '__main__':
     main()
