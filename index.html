@@ -10,7 +10,7 @@
 .story-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}.story-card{overflow:hidden;background:#fff;border:1px solid #e6e9e1;border-radius:25px;box-shadow:var(--shadow)}.story-art{height:185px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}.story-art span{font-size:69px}.story-art small{font-size:12px;font-weight:800;color:#54705e}.art-clock{background:#f8ebd7}.art-grow{background:#e6f0e4}.art-season{background:#f0e8e5}.story-body{padding:25px 25px 29px}.story-tag{color:#4a8561;font-size:11px;font-weight:900}.story-body h3{font-size:18px;line-height:1.55;letter-spacing:-.04em;margin:10px 0}.story-body p{font-size:13px;color:#778279;line-height:1.85;min-height:75px}.story-body a{font-size:12px;color:var(--green);font-weight:900;text-decoration:underline;text-underline-offset:5px}.story-note{text-align:center;color:#889187;font-size:11px;margin:24px 0 0}.story-more{display:flex;justify-content:center;margin-top:24px}@media(max-width:850px){.story-grid{grid-template-columns:1fr}.story-art{height:160px}.story-body p{min-height:0}}
 
 /* 자동 블로그 새 글 목록 */
-.rss-status{text-align:center;font-size:12px;color:#76857a;margin:-17px 0 25px;min-height:20px}.rss-card{display:flex;flex-direction:column;min-height:245px}.rss-card .story-body{height:100%;display:flex;flex-direction:column}.rss-card .story-body h3{flex:1}.rss-card .story-date{font-size:12px;color:#7d8a80;margin:4px 0 17px}.rss-card .story-body a{margin-top:auto}.rss-art{height:125px;display:flex;align-items:center;justify-content:center;background:#e9f1e7;font-size:42px}.rss-art:nth-child(4n){background:#f8ebd7}.rss-empty{grid-column:1/-1;background:white;border:1px dashed #cddbcf;border-radius:24px;text-align:center;padding:42px 24px;color:#6a7d70;line-height:1.9}.rss-empty strong{display:block;font-size:18px;color:#345d45;margin-bottom:7px}.rss-empty a{color:#326f58;font-weight:800;text-decoration:underline;text-underline-offset:3px}
+.rss-status{text-align:center;font-size:12px;color:#76857a;margin:-17px 0 25px;min-height:20px}.rss-card{display:flex;flex-direction:column;min-height:245px}.rss-card .story-body{height:100%;display:flex;flex-direction:column}.rss-card .story-body h3{flex:1}.rss-card .story-date{font-size:12px;color:#7d8a80;margin:4px 0 17px}.rss-card .story-body a{margin-top:auto}.rss-art{height:125px;display:flex;align-items:center;justify-content:center;background:#e9f1e7;font-size:42px}.rss-art:nth-child(4n){background:#f8ebd7}.rss-art img{display:block;width:100%;height:100%;object-fit:cover}.rss-empty{grid-column:1/-1;background:white;border:1px dashed #cddbcf;border-radius:24px;text-align:center;padding:42px 24px;color:#6a7d70;line-height:1.9}.rss-empty strong{display:block;font-size:18px;color:#345d45;margin-bottom:7px}.rss-empty a{color:#326f58;font-weight:800;text-decoration:underline;text-underline-offset:3px}
 </style></head>
 <body>
 <header class="header"><nav class="wrap nav"><a href="#top" class="brand"><span class="mark">🌿</span><span>한솔 노피곰<small>걸포오스타파라곤교실</small></span></a><div class="links" id="navlinks"><a href="#about">교실 소개</a><a href="#classes">교육 프로그램</a><a href="#daily">운영 안내</a><a href="#stories">교실 이야기</a><a href="https://m.blog.naver.com/urim_cozy_study" target="_blank" rel="noopener noreferrer">공식 블로그 ↗</a><a href="#contact">상담 문의</a></div><a class="navcta" href="#contact">상담 문의하기 ↗</a><button class="menu" id="menu" aria-label="메뉴 열기" aria-expanded="false">☰</button></nav></header>
@@ -50,7 +50,25 @@
     let url;
     try {url = new URL(post.url); if (url.protocol !== 'https:' || !/(^|\.)blog\.naver\.com$/.test(url.hostname)) return null;} catch {return null;}
     const article=document.createElement('article');article.className='story-card rss-card';
-    const art=document.createElement('div');art.className='rss-art';art.textContent='📖';art.setAttribute('aria-hidden','true');
+    const art=document.createElement('div');art.className='rss-art';
+    const fallback=()=>{art.replaceChildren();art.textContent='📖';art.setAttribute('aria-hidden','true');};
+    let picture=null;
+    if (typeof post.image === 'string' && post.image.trim()) {
+      try {
+        const imgUrl=new URL(post.image);
+        const imageHosts=['blogfiles.pstatic.net','postfiles.pstatic.net','mblogthumb-phinf.pstatic.net','phinf.pstatic.net','ssl.pstatic.net'];
+        if(imgUrl.protocol==='https:' && imageHosts.includes(imgUrl.hostname)) {
+          picture=document.createElement('img');
+          picture.src=imgUrl.href;
+          picture.alt=post.title+' 대표 사진';
+          picture.loading='lazy';picture.decoding='async';
+          picture.referrerPolicy='no-referrer';
+          picture.onerror=fallback;
+          art.append(picture);
+        }
+      } catch(_) { /* Invalid thumbnail: use fallback. */ }
+    }
+    if (!picture) fallback();
     const body=document.createElement('div');body.className='story-body';
     const tag=document.createElement('span');tag.className='story-tag';tag.textContent='네이버 블로그 · 최신 글';
     const title=document.createElement('h3');title.textContent=post.title;
